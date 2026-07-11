@@ -1,0 +1,55 @@
+{
+  "vikunja_url": {
+    "description": "Vikunja 地址",
+    "type": "string",
+    "hint": "例如 https://todo.example.com；插件会自动补全 /api/v1。",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "api_token": {
+    "description": "Vikunja API Token",
+    "type": "string",
+    "hint": "请创建具有任务和项目读写权限的 API Token。不要在聊天中发送 Token。",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "default_project": {
+    "description": "默认项目",
+    "type": "string",
+    "hint": "未指定项目的日常琐事进入这里。可填写完整路径、唯一名称或项目 ID。",
+    "default": "Inbox"
+  },
+  "allowed_qq_sender_ids": {
+    "description": "允许使用插件的 QQ 发送者 ID",
+    "type": "list",
+    "hint": "只对 qq_official/qq_official_webhook 生效。微信 weixin_oc 始终不检查此白名单。留空表示 QQ 也不校验身份。",
+    "default": []
+  },
+  "timezone": {
+    "description": "时区",
+    "type": "string",
+    "hint": "IANA 时区名称，例如 Asia/Shanghai。",
+    "default": "Asia/Shanghai"
+  },
+  "reminder_minutes": {
+    "description": "默认提前提醒分钟数",
+    "type": "int",
+    "default": 30
+  },
+  "poll_interval_seconds": {
+    "description": "提醒轮询间隔（秒）",
+    "type": "int",
+    "hint": "建议不低于 30 秒。",
+    "default": 60
+  },
+  "request_timeout_seconds": {
+    "description": "Vikunja 请求超时（秒）",
+    "type": "int",
+    "default": 15
+  },
+  "max_list_items": {
+    "description": "单次查询最多展示任务数",
+    "type": "int",
+    "default": 20
+  }
+}

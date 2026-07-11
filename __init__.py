@@ -1,0 +1,2 @@
+"""AstrBot Vikunja plugin package."""
+
