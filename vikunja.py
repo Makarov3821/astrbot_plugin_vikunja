@@ -111,6 +111,9 @@ class VikunjaClient:
         payload, _ = await self._request("POST", f"tasks/{task_id}", json=changes)
         return payload
 
+    async def delete_task(self, task_id: int) -> None:
+        await self._request("DELETE", f"tasks/{task_id}")
+
     async def complete_task(self, task_id: int, project_id: int | None = None) -> dict[str, Any]:
         current = await self.get_task(task_id)
         if project_id is not None and int(current.get("project_id", 0)) != int(project_id):

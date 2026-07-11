@@ -58,9 +58,11 @@ SECRETARY_PROMPT = """
    - 若用户明确给出了任务 ID（如"2已完成"），直接调用完成任务工具
    - 若用户只说"第二个做完了"，先查询任务列表确认是哪个任务，然后立即调用完成任务工具
    - 不得只查询不操作
-8. 只有工具明确返回成功后才能告诉用户已创建或已修改；工具要求补充信息时，继续询问用户。
-9. 用简洁、自然的中文交流，不要求用户记忆斜杠命令。
-10. 当用户说"帮我记下""帮我记录""添加待办""新建任务""记一下""备注一下""加一条"等表达时，视作创建任务意图。提取标题、截止时间、项目等信息后调用创建工具。信息不足时先追问再调用。
+8. 当用户要求删除任务且给出了任务 ID，直接调用删除工具；未给出 ID 时先查询定位，再立即调用删除工具，不得只查询不删除。
+9. 工具返回的任务列表中，“1.”是本次列表序号，“#123”才是任务 ID。用户说“第一个/1号”且没有明确说“ID”或“#”时，先查询当前列表，将序号换成对应的 #任务ID 后再操作。
+10. 只有工具明确返回成功后才能告诉用户已创建、已完成或已删除；工具要求补充信息时，继续询问用户。
+11. 用简洁、自然的中文交流，不要求用户记忆斜杠命令。
+12. 当用户说"帮我记下""帮我记录""添加待办""新建任务""记一下""备注一下""加一条"等表达时，视作创建任务意图。提取标题、截止时间、项目等信息后调用创建工具。信息不足时先追问再调用。
 
 ## 对话示例
 
@@ -371,16 +373,16 @@ class VikunjaPlugin(Star):
             yield event.plain_result(str(exc))
 
     @filter.llm_tool(name="vikunja_list_projects")
-    async def vikunja_list_projects(self, event: AstrMessageEvent):
+    async def vikunja_list_projects(self, event: AstrMessageEvent) -> str:
         """查询完整的 Vikunja 项目层级；创建工作或项目任务前应先用它确认位置。
 
         Args:
         """
         try:
             await self._register_channel(event)
-            yield event.plain_result(format_project_tree(await self.client.list_projects()))
+            return format_project_tree(await self.client.list_projects())
         except (PrivateOnlyError, VikunjaError) as exc:
-            yield event.plain_result(str(exc))
+            return str(exc)
 
     @filter.llm_tool(name="vikunja_create_task")
     async def vikunja_create_task(
@@ -392,7 +394,7 @@ class VikunjaPlugin(Star):
         priority: int = 0,
         repeat: str = "",
         is_reminder: bool = False,
-    ):
+    ) -> str:
         """用户说“帮我记下”“添加待办”“新建任务”“记一下”“加一条”等表达时视为创建任务。确认信息充分后创建 Vikunja 任务。用户说“提醒”时 due 必填；工作事项 project 必填。
 若工具返回缺失信息提示，必须先向用户确认，然后用补充后的信息重新调用本工具。
 
@@ -407,8 +409,7 @@ class VikunjaPlugin(Star):
         try:
             reason = secretary_clarification_reason(title, due, repeat, project, is_reminder)
             if reason:
-                yield event.plain_result(f"需要先向用户确认：{reason}。\n请向用户确认以上缺失信息后，获取用户回复，用补充完整的信息重新调用本工具创建任务。")
-                return
+                return f"需要先向用户确认：{reason}。\n请向用户确认以上缺失信息后，获取用户回复，用补充完整的信息重新调用本工具创建任务。"
             repeat_after, repeat_mode = parse_repeat(repeat)
             due_at = parse_datetime(due, self.tz) if due else None
             if (repeat_after or repeat_mode) and not due_at:
@@ -424,12 +425,12 @@ class VikunjaPlugin(Star):
                     repeat_mode=repeat_mode,
                 ),
             )
-            yield event.plain_result(f"已创建任务 #{task['id']} {task['title']}，项目：{path}")
+            return f"已创建任务 #{task['id']} {task['title']}，项目：{path}"
         except (ValueError, VikunjaError) as exc:
-            yield event.plain_result(f"创建失败：{exc}")
+            return f"创建失败：{exc}"
 
     @filter.llm_tool(name="vikunja_complete_task")
-    async def vikunja_complete_task(self, event: AstrMessageEvent, task_id: int):
+    async def vikunja_complete_task(self, event: AstrMessageEvent, task_id: int) -> str:
         """当用户说"XX做完了""XX完成了""XX好了""搞定""勾掉""标记完成"等表达时，直接调用本工具传入任务 ID 完成该任务，无需提前查询。
 
         Args:
@@ -438,14 +439,29 @@ class VikunjaPlugin(Star):
         try:
             await self._register_channel(event)
             task = await self.client.complete_task(int(task_id))
-            yield event.plain_result(f"已完成 #{task_id} {task.get('title', '')}")
-        except (PrivateOnlyError, VikunjaError) as exc:
-            yield event.plain_result(f"完成失败：{exc}")
+            return f"已完成 #{task_id} {task.get('title', '')}"
+        except (ValueError, PrivateOnlyError, VikunjaError) as exc:
+            return f"完成失败：{exc}"
+
+    @filter.llm_tool(name="vikunja_delete_task")
+    async def vikunja_delete_task(self, event: AstrMessageEvent, task_id: int) -> str:
+        """用户明确要求删除某个任务时调用。删除不可撤销；目标不明确时必须先查询任务列表定位 ID。
+
+        Args:
+            task_id(number): Vikunja 任务 ID，即任务列表中 # 后面的数字；不是列表前面的序号
+        """
+        try:
+            await self._register_channel(event)
+            task = await self.client.get_task(int(task_id))
+            await self.client.delete_task(int(task_id))
+            return f"已删除 #{task_id} {task.get('title', '')}"
+        except (ValueError, PrivateOnlyError, VikunjaError) as exc:
+            return f"删除失败：{exc}"
 
     @filter.llm_tool(name="vikunja_list_tasks")
     async def vikunja_list_tasks(
         self, event: AstrMessageEvent, scope: str = "today", project: str = ""
-    ):
+    ) -> str:
         """用户问"还有什么待办""今天有什么任务""本周待办""我的任务"时调用本工具。查询所有项目或指定项目的未完成任务，并按优先级排序。
 
         Args:
@@ -454,9 +470,9 @@ class VikunjaPlugin(Star):
         """
         try:
             normalized = scope.lower() if scope.lower() in {"today", "week", "overdue", "all"} else "today"
-            yield event.plain_result(await self._list(event, normalized, project))
-        except (ValueError, VikunjaError) as exc:
-            yield event.plain_result(f"查询失败：{exc}")
+            return await self._list(event, normalized, project)
+        except (ValueError, PrivateOnlyError, VikunjaError) as exc:
+            return f"查询失败：{exc}"
 
     async def terminate(self) -> None:
         if self._reminder_task and not self._reminder_task.done():
