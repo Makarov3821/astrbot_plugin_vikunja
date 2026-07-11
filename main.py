@@ -52,9 +52,29 @@ SECRETARY_PROMPT = """
 2. 用户要求提醒时，必须确认明确的截止日期和时间；缺少时先询问，不得调用创建工具。
 3. 对论文、项目推进、学习计划、习惯等明显长期事项，若缺少截止时间、持续时长或重复频率，先询问确认。
 4. 日常琐事可放入 Inbox；工作或项目事项必须选到合适的项目层级。项目不明确时先调用项目树工具，仍有歧义就询问用户。
-5. 修改或完成事项前，若目标任务不唯一，先查询并请用户确认任务 ID。
-6. 只有工具明确返回成功后才能告诉用户已创建或已修改；工具要求补充信息时，继续询问用户。
-7. 用简洁、自然的中文交流，不要求用户记忆斜杠命令。
+5. 所有待办的创建、完成、查询操作，只能使用 Vikunja 工具，不得使用其他工具（如 cron、定时任务等）。
+6. 当创建工具返回需要补充信息时，你必须先向用户询问确认缺失信息，获取用户回复后，必须用补充完整的信息重新调用同一个创建工具，不得转向其他工具。
+7. 当用户说"XX做完了""XX完成了""XX好了""XX搞定""勾掉XX""标记完成""OK了"等表达时，必须执行完成操作：
+   - 若用户明确给出了任务 ID（如"2已完成"），直接调用完成任务工具
+   - 若用户只说"第二个做完了"，先查询任务列表确认是哪个任务，然后立即调用完成任务工具
+   - 不得只查询不操作
+8. 只有工具明确返回成功后才能告诉用户已创建或已修改；工具要求补充信息时，继续询问用户。
+9. 用简洁、自然的中文交流，不要求用户记忆斜杠命令。
+10. 当用户说"帮我记下""帮我记录""添加待办""新建任务""记一下""备注一下""加一条"等表达时，视作创建任务意图。提取标题、截止时间、项目等信息后调用创建工具。信息不足时先追问再调用。
+
+## 对话示例
+
+用户：帮我记下明天下午3点开会
+助手：[直接调用创建工具，title="开会"，due="明天15点"]
+
+用户：今天有什么任务
+助手：[调用查询工具，scope="today"]
+
+用户：2已完成
+助手：[直接调用完成任务工具，task_id=2]
+
+用户：还有个待办没做
+助手：[调用查询工具列出未完成任务]
 """
 
 
@@ -373,7 +393,8 @@ class VikunjaPlugin(Star):
         repeat: str = "",
         is_reminder: bool = False,
     ):
-        """确认信息充分后创建 Vikunja 任务。用户说“提醒”时 due 必填；工作事项 project 必填。
+        """用户说“帮我记下”“添加待办”“新建任务”“记一下”“加一条”等表达时视为创建任务。确认信息充分后创建 Vikunja 任务。用户说“提醒”时 due 必填；工作事项 project 必填。
+若工具返回缺失信息提示，必须先向用户确认，然后用补充后的信息重新调用本工具。
 
         Args:
             title(string): 简洁的任务标题
@@ -386,7 +407,7 @@ class VikunjaPlugin(Star):
         try:
             reason = secretary_clarification_reason(title, due, repeat, project, is_reminder)
             if reason:
-                yield event.plain_result(f"需要先向用户确认：{reason}。尚未创建任务。")
+                yield event.plain_result(f"需要先向用户确认：{reason}。\n请向用户确认以上缺失信息后，获取用户回复，用补充完整的信息重新调用本工具创建任务。")
                 return
             repeat_after, repeat_mode = parse_repeat(repeat)
             due_at = parse_datetime(due, self.tz) if due else None
@@ -409,10 +430,10 @@ class VikunjaPlugin(Star):
 
     @filter.llm_tool(name="vikunja_complete_task")
     async def vikunja_complete_task(self, event: AstrMessageEvent, task_id: int):
-        """完成一个已经由用户确认 ID 的 Vikunja 任务。
+        """当用户说"XX做完了""XX完成了""XX好了""搞定""勾掉""标记完成"等表达时，直接调用本工具传入任务 ID 完成该任务，无需提前查询。
 
         Args:
-            task_id(number): 用户已确认的 Vikunja 任务 ID
+            task_id(number): Vikunja 任务 ID，即任务列表中 # 后面的数字
         """
         try:
             await self._register_channel(event)
@@ -425,7 +446,7 @@ class VikunjaPlugin(Star):
     async def vikunja_list_tasks(
         self, event: AstrMessageEvent, scope: str = "today", project: str = ""
     ):
-        """查询所有项目或指定项目的未完成任务，并按优先级排序。
+        """用户问"还有什么待办""今天有什么任务""本周待办""我的任务"时调用本工具。查询所有项目或指定项目的未完成任务，并按优先级排序。
 
         Args:
             scope(string): 查询范围，today、week、overdue 或 all
