@@ -55,10 +55,12 @@ def parse_datetime(value: str, tz: ZoneInfo, now: datetime | None = None) -> dat
         offset = {"今天": 0, "明天": 1, "后天": 2}[day_match.group(1)]
         hour = int(day_match.group(2) or 23)
         minute = int(day_match.group(3) or (59 if day_match.group(2) is None else 0))
-        return datetime.combine(now.date() + timedelta(days=offset), time(hour, minute), tz)
+        return datetime.combine(
+            now.date() + timedelta(days=offset), time(hour, minute), tz
+        )
 
     weekday_match = re.fullmatch(
-        r"(?:(本周|下周))?(?:周|星期)([一二三四五六日天])"
+        r"(本周|下周|周|星期)([一二三四五六日天])"
         r"(?:\s*(\d{1,2})(?::|点)(\d{1,2})?(?:分)?)?",
         value,
     )
@@ -66,14 +68,19 @@ def parse_datetime(value: str, tz: ZoneInfo, now: datetime | None = None) -> dat
         target_weekday = "一二三四五六日天".index(weekday_match.group(2))
         target_weekday = min(target_weekday, 6)
         days = (target_weekday - now.weekday()) % 7
-        if weekday_match.group(1) == "下周":
-            days = days + 7 if days else 7
+        if weekday_match.group(1) in {"下周", "本周"}:
+            days = (
+                target_weekday
+                - now.weekday()
+                + (7 if weekday_match.group(1) == "下周" else 0)
+            )
         hour = int(weekday_match.group(3) or 23)
         minute = int(
-            weekday_match.group(4)
-            or (59 if weekday_match.group(3) is None else 0)
+            weekday_match.group(4) or (59 if weekday_match.group(3) is None else 0)
         )
-        result = datetime.combine(now.date() + timedelta(days=days), time(hour, minute), tz)
+        result = datetime.combine(
+            now.date() + timedelta(days=days), time(hour, minute), tz
+        )
         if weekday_match.group(1) != "本周" and result <= now:
             result += timedelta(days=7)
         return result
@@ -101,7 +108,11 @@ def parse_datetime(value: str, tz: ZoneInfo, now: datetime | None = None) -> dat
         return result
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return parsed.replace(tzinfo=tz) if parsed.tzinfo is None else parsed.astimezone(tz)
+        return (
+            parsed.replace(tzinfo=tz)
+            if parsed.tzinfo is None
+            else parsed.astimezone(tz)
+        )
     except ValueError as exc:
         raise ValueError(
             "无法识别时间，可用示例：明天9点、2小时后、2026-07-12 18:00"
@@ -149,7 +160,9 @@ def parse_duration_minutes(value: str) -> int:
         raise ValueError("提醒时间可用：30m、2h、1d")
     amount = int(match.group(1))
     unit = match.group(2) or "m"
-    return amount * {"m": 1, "分钟": 1, "h": 60, "小时": 60, "d": 1440, "天": 1440}[unit]
+    return (
+        amount * {"m": 1, "分钟": 1, "h": 60, "小时": 60, "d": 1440, "天": 1440}[unit]
+    )
 
 
 def secretary_clarification_reason(
@@ -168,10 +181,6 @@ def secretary_clarification_reason(
         )
     ):
         reasons.append("这是提醒事项，但还没有明确到具体时间的截止日期")
-    if not project and any(word in lowered for word in WORK_WORDS):
-        reasons.append("这个事项看起来属于工作或项目，需要确认目标项目")
-    if not due and not repeat and any(word in lowered for word in LONG_TERM_WORDS):
-        reasons.append("这个事项看起来周期较长，需要确认截止时间、计划时长或重复频率")
     if not repeat and any(word in lowered for word in {"每天", "每周", "每月", "定期"}):
         reasons.append("标题包含周期含义，需要确认具体重复频率")
     return "；".join(reasons) if reasons else None
@@ -215,7 +224,9 @@ class AddSpec:
         return result
 
 
-def parse_add_arguments(text: str, tz: ZoneInfo, now: datetime | None = None) -> AddSpec:
+def parse_add_arguments(
+    text: str, tz: ZoneInfo, now: datetime | None = None
+) -> AddSpec:
     try:
         tokens = shlex.split(text)
     except ValueError as exc:
@@ -273,7 +284,9 @@ def parse_add_arguments(text: str, tz: ZoneInfo, now: datetime | None = None) ->
 
 
 def task_sort_key(task: dict[str, Any]) -> tuple[int, datetime, int]:
-    due = from_vikunja_time(task.get("due_date")) or datetime.max.replace(tzinfo=timezone.utc)
+    due = from_vikunja_time(task.get("due_date")) or datetime.max.replace(
+        tzinfo=timezone.utc
+    )
     return (-int(task.get("priority") or 0), due, int(task.get("id") or 0))
 
 
@@ -313,7 +326,11 @@ def format_task_list(
         priority = int(task.get("priority") or 0)
         due = from_vikunja_time(task.get("due_date"))
         due_text = due.astimezone(tz).strftime("%m-%d %H:%M") if due else "无截止时间"
-        repeat = " ↻" if int(task.get("repeat_after") or 0) or int(task.get("repeat_mode") or 0) else ""
+        repeat = (
+            " ↻"
+            if int(task.get("repeat_after") or 0) or int(task.get("repeat_mode") or 0)
+            else ""
+        )
         lines.append(
             f"{len(lines)}. [P{priority}] #{task.get('id')} {task.get('title', '')}{repeat}\n"
             f"   📁 {(project_paths or {}).get(int(task.get('project_id') or 0), '未知项目')}  ⏰ {due_text}"
@@ -388,9 +405,12 @@ def format_project_tree(projects: list[dict[str, Any]]) -> str:
 
     def walk(parent: int, depth: int) -> None:
         for project in sorted(
-            children.get(parent, []), key=lambda item: str(item.get("title", "")).casefold()
+            children.get(parent, []),
+            key=lambda item: str(item.get("title", "")).casefold(),
         ):
-            lines.append(f"{'  ' * depth}• {project.get('title', '')} (#{project['id']})")
+            lines.append(
+                f"{'  ' * depth}• {project.get('title', '')} (#{project['id']})"
+            )
             walk(int(project["id"]), depth + 1)
 
     walk(0, 0)

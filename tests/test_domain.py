@@ -50,9 +50,27 @@ class DomainTests(unittest.TestCase):
 
     def test_today_includes_overdue_and_sorts_priority(self):
         tasks = [
-            {"id": 1, "title": "低", "priority": 1, "due_date": "2026-07-10T12:00:00Z", "done": False},
-            {"id": 2, "title": "高", "priority": 5, "due_date": "2026-07-11T12:00:00Z", "done": False},
-            {"id": 3, "title": "未来", "priority": 5, "due_date": "2026-07-13T12:00:00Z", "done": False},
+            {
+                "id": 1,
+                "title": "低",
+                "priority": 1,
+                "due_date": "2026-07-10T12:00:00Z",
+                "done": False,
+            },
+            {
+                "id": 2,
+                "title": "高",
+                "priority": 5,
+                "due_date": "2026-07-11T12:00:00Z",
+                "done": False,
+            },
+            {
+                "id": 3,
+                "title": "未来",
+                "priority": 5,
+                "due_date": "2026-07-13T12:00:00Z",
+                "done": False,
+            },
         ]
         selected = select_tasks(tasks, "today", self.tz, self.now)
         self.assertEqual([task["id"] for task in selected], [2, 1])
@@ -89,8 +107,19 @@ class DomainTests(unittest.TestCase):
             "推进 SMX paper", due="", repeat="", project="", is_reminder=True
         )
         self.assertIn("具体时间", reason)
-        self.assertIn("目标项目", reason)
-        self.assertIn("周期较长", reason)
+        self.assertNotIn("目标项目", reason)
+        self.assertNotIn("周期较长", reason)
+
+    def test_unscheduled_research_is_allowed(self):
+        self.assertIsNone(
+            secretary_clarification_reason("思考论文方案", "", "", "", False)
+        )
+
+    def test_next_week_is_calendar_week(self):
+        self.assertEqual(
+            parse_datetime("下周二14点", self.tz, self.now),
+            datetime(2026, 7, 14, 14, tzinfo=self.tz),
+        )
 
     def test_secretary_guard_allows_clear_everyday_task(self):
         self.assertIsNone(
@@ -108,7 +137,9 @@ class DomainTests(unittest.TestCase):
         qq_ids = ["my-qq-uid"]
         self.assertTrue(platform_sender_is_allowed("qq_official", "my-qq-uid", qq_ids))
         self.assertFalse(platform_sender_is_allowed("qq_official", "other-qq", qq_ids))
-        self.assertTrue(platform_sender_is_allowed("weixin_oc", "any-weixin-id", qq_ids))
+        self.assertTrue(
+            platform_sender_is_allowed("weixin_oc", "any-weixin-id", qq_ids)
+        )
 
     def test_reminder_with_date_but_no_clock_time_requires_clarification(self):
         reason = secretary_clarification_reason(

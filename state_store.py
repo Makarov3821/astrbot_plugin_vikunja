@@ -19,6 +19,7 @@ class StateStore:
             "channels": {},
             "task_reminder_minutes": {},
             "sent": {},
+            "local_items": {},
         }
 
     async def initialize(self) -> None:
@@ -32,6 +33,20 @@ class StateStore:
         value = self._state["channels"].get(key)
         return deepcopy(value) if value else None
 
+    def local_items(self, channel: str) -> list[dict[str, Any]]:
+        return [
+            deepcopy(x)
+            for x in self._state["local_items"].values()
+            if x["channel"] == channel
+        ]
+
+    async def put_local_item(self, item: dict[str, Any]) -> None:
+        async with self._lock:
+            updated = deepcopy(self._state)
+            updated["local_items"][item["id"]] = deepcopy(item)
+            await self._save(updated)
+            self._state = updated
+
     def channels(self) -> dict[str, dict[str, Any]]:
         return deepcopy(self._state["channels"])
 
@@ -44,7 +59,9 @@ class StateStore:
     async def register_channel(self, key: str, channel: dict[str, Any]) -> None:
         async with self._lock:
             current = self._state["channels"].get(key, {})
-            channel.setdefault("reminders_enabled", current.get("reminders_enabled", True))
+            channel.setdefault(
+                "reminders_enabled", current.get("reminders_enabled", True)
+            )
             self._state["channels"][key] = channel
             await self._save(deepcopy(self._state))
 
@@ -64,7 +81,9 @@ class StateStore:
         async with self._lock:
             self._state["sent"][key] = sent_at
             if len(self._state["sent"]) > 2000:
-                oldest = sorted(self._state["sent"].items(), key=lambda item: item[1])[:500]
+                oldest = sorted(self._state["sent"].items(), key=lambda item: item[1])[
+                    :500
+                ]
                 for old_key, _ in oldest:
                     self._state["sent"].pop(old_key, None)
             await self._save(deepcopy(self._state))

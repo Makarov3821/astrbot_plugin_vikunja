@@ -2,7 +2,7 @@ name: astrbot_plugin_vikunja
 display_name: Vikunja 待办助手
 desc: 单用户通过 QQ 与微信私聊共享 Vikunja 项目、任务和临期提醒的私人秘书。
 short_desc: QQ 与微信共享的 Vikunja 私人待办秘书。
-version: v0.3.0
+version: v0.4.0
 author: Marshall
 repo: "https://github.com/Makarov3821/astrbot_plugin_vikunja"
 astrbot_version: ">=4.22.1,<5"
