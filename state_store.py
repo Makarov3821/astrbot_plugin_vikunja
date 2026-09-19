@@ -20,6 +20,8 @@ class StateStore:
             "task_reminder_minutes": {},
             "sent": {},
             "local_items": {},
+            "briefings": {},
+            "meta": {},
         }
 
     async def initialize(self) -> None:
@@ -28,6 +30,27 @@ class StateStore:
             for key in self._state:
                 if isinstance(loaded.get(key), dict):
                     self._state[key] = loaded[key]
+
+    # --------------------------------------------------------------- briefings
+
+    def last_briefing(self, channel: str) -> str:
+        return str(self._state["briefings"].get(channel, ""))
+
+    async def mark_briefing(self, channel: str, day: str) -> None:
+        async with self._lock:
+            self._state["briefings"][channel] = day
+            await self._save(deepcopy(self._state))
+
+    # -------------------------------------------------------------------- meta
+
+    def meta(self, key: str, default: Any = None) -> Any:
+        value = self._state["meta"].get(key, default)
+        return deepcopy(value) if isinstance(value, (dict, list)) else value
+
+    async def set_meta(self, key: str, value: Any) -> None:
+        async with self._lock:
+            self._state["meta"][key] = deepcopy(value)
+            await self._save(deepcopy(self._state))
 
     def channel(self, key: str) -> dict[str, Any] | None:
         value = self._state["channels"].get(key)

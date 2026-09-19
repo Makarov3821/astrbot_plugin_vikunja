@@ -1,27 +1,16 @@
-import importlib.util
-import ast
-import asyncio
-import sys
 import types
 import unittest
-from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 from state_store import StateStore
 
-# Load the plugin package without importing AstrBot's entry point.
-ROOT = Path(__file__).resolve().parents[1]
-package = types.ModuleType("planner_test_plugin")
-package.__path__ = [str(ROOT)]
-sys.modules[package.__name__] = package
-spec = importlib.util.spec_from_file_location(
-    "planner_test_plugin.local_planner", ROOT / "local_planner.py"
+from plugin_loader import (  # noqa: E402
+    LocalPlanner,
+    load_plugin_class,
+    vikunja_module,
 )
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
-LocalPlanner = module.LocalPlanner
 
 
 class PlannerTests(unittest.IsolatedAsyncioTestCase):
@@ -106,55 +95,43 @@ class PlannerTests(unittest.IsolatedAsyncioTestCase):
         await self.planner.dispatch(self.send, self.when)
         self.send.assert_not_awaited()
 
-    async def test_plugin_tools_and_confirmation_context(self):
+    async def test_plugin_falls_back_to_local_when_vikunja_is_down(self):
         # Exercise actual plugin methods with only AstrBot decorators/imports removed.
-        # This checks plugin integration, not the external AstrBot executor.
-        tree = ast.parse((ROOT / "main.py").read_text())
-        tree.body = [
-            n for n in tree.body if not isinstance(n, (ast.Import, ast.ImportFrom))
-        ]
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                node.decorator_list = []
-        ns = dict(module.__dict__)
-        ns.update(Star=object, asyncio=asyncio, StateStore=StateStore)
-        from planner_test_plugin import todo_domain
-
-        ns.update(vars(todo_domain))
-        exec(
-            compile(
-                ast.fix_missing_locations(tree),
-                str(ROOT / "main.py"),
-                "exec",
-                flags=__import__("__future__").annotations.compiler_flag,
-            ),
-            ns,
-        )
-        plugin = ns["VikunjaPlugin"].__new__(ns["VikunjaPlugin"])
+        plugin = load_plugin_class().__new__(load_plugin_class())
         plugin.state, plugin.planner, plugin.tz = (
             self.state,
             self.planner,
             self.planner.tz,
         )
+        plugin.tz_name = "Asia/Shanghai"
         plugin.config, plugin._ready = {}, True
+        # An unconfigured client raises VikunjaError on every call.
+        plugin.client = vikunja_module.VikunjaClient("", "")
+        plugin._projects_cache = None
+        plugin._labels_cache = None
         event = types.SimpleNamespace(
             unified_msg_origin="qq",
             get_group_id=lambda: "",
             get_platform_name=lambda: "qq_official",
             get_sender_id=lambda: "me",
         )
-        result = await plugin.planner_create(
-            event, "买牛奶", self.when.isoformat(), "reminder"
+        result = await plugin.vikunja_create_task(
+            event, "买牛奶", due=self.when.astimezone(self.planner.tz).isoformat()
         )
-        self.assertIn("已记录", result)
+        self.assertIn("已先记在本地", result)
         await self.planner.dispatch(self.send, self.when)
+        self.assertEqual(self.send.await_count, 1)
+
         req = types.SimpleNamespace(system_prompt="")
         await plugin.on_llm_request(event, req)
-        self.assertIn("已提醒次数=1", req.system_prompt)
+        self.assertIn("买牛奶", req.system_prompt)
+        self.assertIn("Vikunja 未配置", req.system_prompt)
+
         item = self.state.local_items("qq")[0]
-        result = await plugin.planner_change(event, item["id"], "done")
-        self.assertIn("done", result)
+        await self.planner.change("qq", item["id"], "done")
         await self.planner.dispatch(self.send, self.when + timedelta(days=1))
         self.assertEqual(self.send.await_count, 1)
+
         event.get_group_id = lambda: "group"
-        self.assertIn("只支持私聊", await plugin.planner_list(event))
+        with self.assertRaisesRegex(ValueError, "只支持私聊"):
+            plugin._assert_private(event)

@@ -1,134 +1,157 @@
-# AstrBot Vikunja 私人待办秘书
+# AstrBot Vikunja 秘书大脑
 
 ![astrbot_plugin_vikunja](https://count.getloli.com/@astrbot_plugin_vikunja)
 
-面向单一用户的 AstrBot 插件。QQ 官方机器人私聊和微信个人号 ClawBot（`weixin_oc`）是同一个 Vikunja 工作空间的两个入口：都能查看全部项目和任务，也都可以接收提醒。插件不响应群聊中的待办命令，LLM Tool 在群聊中也会拒绝读写。
+面向单一用户的 AstrBot 插件。把自建 Vikunja 当作唯一事实源，在 QQ 官方机器人私聊或微信
+`weixin_oc` 私聊里记录、安排、改期和提醒；同时在 Vikunja 网页上留下一套能直接看的跨项目
+看板与甘特图。插件不响应群聊，LLM Tool 在群聊中也会拒绝读写。
 
-## 使用模型
+## 它解决什么
 
-- 一个 AstrBot 实例、一个 Vikunja API Token、一个真实用户。
-- QQ 和微信不分别绑定项目，只登记为提醒渠道。
-- 两个入口共享全部项目、子项目、任务和完成状态。
-- 未指定项目的日常琐事进入默认 `Inbox`。
-- 工作事项使用完整项目路径，例如 `fudan-work/SMX/paper`。
-- 每个入口可独立执行 `/todo remind on|off`；默认都会收到提醒。
+Vikunja 里的 project 只显示自己的任务，父项目不会聚合子项目，所以多个课题、多个实习项目加上
+生活杂事放进不同 project 之后，网页上看不到一张全局的大图。这个插件把三个维度分开使用：
 
-## 秘书模式
+| 维度 | 用途 | 谁来维护 |
+| --- | --- | --- |
+| project | 这件事属于谁：课题、实习项目、生活杂事 | 你，偶尔调整 |
+| label | 什么场景能做、要多久：`@深度` `@碎片` `@外出` `@要找人` `@等待中`、`est15`~`est4h` | 秘书自动带上 |
+| 日期 | `due_date` 只写真死线；`start_date`/`end_date` 是"打算什么时候做"的时间块；`reminders` 决定什么时候响铃 | 秘书每天改 |
 
-### 本地待办与独立提醒（无需 Vikunja）
+跨项目的大图由 **saved filter** 提供，它在 Vikunja 里是虚拟项目，自带 List / Table / Kanban /
+Gantt 四个视图。`/todo setup` 会一次性建好：
 
-本地事项保存在 AstrBot 插件 KV 中，使用 `L` 开头的 ID。提醒只投递到创建它的私聊，
-与 Vikunja 的数字任务 ID 分开；完成本地事项不会修改 Vikunja。容器需持久化 AstrBot 数据目录。
+- `☀️ 今天`：今天到期、已逾期，或今天排了时间块 —— 建议在 Vikunja 设置里设为首页过滤器
+- `⏰ 逾期`、`🗓 本周`、`⏳ 等待中`、`🚶 出门顺手`、`📥 没排期`
+- `🧭 总看板`：Kanban 视图，按 `等待中 / 今天 / 本周 / 以后 / 没排期` 自动分列（filter buckets，不用手动拖）
+- `📈 时间线`：Gantt 视图，跨项目时间轴，子任务分组、依赖关系显示为箭头
 
-- “记一下，思考论文结构，先不设截止日期”：直接保存本地待办，不强迫设置 DDL。
-- “今天下班回去提醒我买牛奶”：先问大概几点下班，确认提醒钟点后创建独立提醒。
-  到点单独发送此事项；默认未确认完成每 30 分钟再次提醒。可通过自然语言指定其他间隔。
-- “已经买了”：模型根据当前私聊的待确认事项调用完成工具；有多项且目标不明时会询问。
-  “知道了”不会视作完成。主动提醒记录会注入后续模型请求，不依赖平台保存主动消息的聊天历史。
-- “半小时后再说”“暂停这个提醒”：实际延后或暂停；完成、取消和暂停都会停止重试。
-- “下周二晚上八点回顾一下这个问题”：设置独立回顾，不改变截止日期；回顾/开始提示只发一次，不反复催促。
-- “等数据到齐再开始，周五问我一下”：保存前置条件，到点询问条件是否满足；用户确认后才能发出开始提示。
+## 秘书能做的事
 
-可分别记录真实截止日期、下次提醒时间、一个可执行的下一步及等待条件。开始时间由用户确认，
-“必须开始”的建议需要工作量和可用时间作依据。本版提供指定时间的开始提示，尚不自动推断空闲或每天挑选任务。
+- 记录：「这周要把课题一的引言重写一下」→ 建任务，不强迫设死线
+- 安排：「帮我排一下今天」「我下午有两小时」→ 读今日候选、按 `est*` 估时贪心排块，写回 `start_date`/`end_date`，网页甘特图立刻可见，已排的块不会被占两次
+- 改期：「来不及了，挪到周三」→ 改 `due`/`start` 并可在任务评论里留一句原因，而不是新建一条重复任务
+- 拆解：「把这篇论文拆一下」→ 建子任务（`parenttask` 关系），必要时用 `blocked`/`precedes` 表达依赖
+- 等待：「等师兄给数据」→ 打 `@等待中`，它就不占今天的清单，但会留在等待中看板里
+- 提醒：任务自带的 `reminders`（含"相对 due 提前 N 分钟"）会推送到聊天里；**你在 Vikunja 网页上设的提醒同样会推**
+- 早报：每天一次（默认 07:30）推送今日议程，可选用模型润色成人话；其余时间你主动问就行
 
-命令兜底：`/todo local`、`/todo done Lxxxxxxxxxx`、`/todo snooze Lxxxxxxxxxx 30分钟后`、
-`/todo pause Lxxxxxxxxxx`。`/todo remind off` 同时暂停当前入口的本地与 Vikunja 提醒。
-模型工具为 `planner_create`、`planner_list`、`planner_change`。
+LLM 工具：`vikunja_list_projects`、`vikunja_create_project`、`vikunja_create_task`、
+`vikunja_update_task`、`vikunja_complete_task`、`vikunja_delete_task`、`vikunja_query_tasks`、
+`vikunja_agenda`、`vikunja_plan_day`、`vikunja_add_subtask`、`vikunja_link_tasks`、
+`vikunja_comment`。需要为该会话启用支持 Tool Calling 的模型；模型未启用工具调用时自然语言不会
+写入 Vikunja，斜杠命令不受影响。
 
-调度默认每 60 秒检查一次，需 AstrBot 持续运行。重启后恢复未完成提醒，错过多次提醒只补一次，
-再从当前发送时刻计算间隔。投递失败按同一间隔重试，不视为已完成；平台是否实际送达仍需实机验证。
-持续提醒没有默认夜间静默，请在不方便时暂停或延后。
+Vikunja 写入失败时（网络中断、Token 失效），创建请求会落到本地 KV 作为降级缓冲（`L` 开头的 ID），
+并明确告知这条还没进 Vikunja；用 `/todo local` 查看，恢复后需要补录。
 
-插件不仅提供命令，还注册了项目树、创建任务、完成任务、删除任务和查询任务五个 LLM Tool，并向私聊会话加入稳定的秘书规则。因此可以直接说：
+## 安装
 
-需要为该会话启用支持 Tool Calling 的模型和 AstrBot Agent；如果模型未启用工具调用，自然语言仍会被普通聊天处理，但不会实际写入 Vikunja，斜杠命令不受影响。
+1. 把本目录放到 AstrBot 的 `data/plugins/astrbot_plugin_vikunja`。
+2. 安装 `requirements.txt`（只有 `aiohttp`）。
+3. 重载插件。AstrBot 最低版本 `4.22.1`。
 
-```text
-提醒我明天下午六点前交周报。
-这周要把 SMX 那篇 paper 的引言重写一下。
-我今天还有什么没做？
-刚才那个买牛奶的任务完成了。
+Docker 部署示例（把源码目录同步到宿主机的 AstrBot 数据目录）：
+
+```bash
+rsync -a --delete \
+  --exclude '.git' --exclude '__pycache__' --exclude '.ruff_cache' --exclude 'tests' \
+  /home/zyl/project/astrbot_plugin_vikunja/ \
+  /home/zyl/data1/astrbot/data/plugins/astrbot_plugin_vikunja/
 ```
 
-模型在写入前应检查信息是否充分。代码层还有第二道保护：
+然后在 AstrBot WebUI 的插件页重载 `astrbot_plugin_vikunja`（或重启容器）。
 
-- 定时提醒没有明确日期和时间：不创建提醒，先追问；普通待办允许不设时间。
-- 工作或思考事项不强制设置截止日期或项目；指定 Vikunja 项目时直接校验选择器。
-- 标题含“每天、每周、每月、定期”但没有确认重复规则：不创建，先追问。
-- 修改或完成目标不唯一时，模型应先查询并让用户确认任务 ID。
+## 配置
 
-这是“规则 + 工具保护”的实现，不依赖模型一次性猜对所有字段。最终是否创建以工具返回结果为准。
+WebUI 插件配置项：
 
-## 安装与配置
+| 配置 | 说明 |
+| --- | --- |
+| `vikunja_url` | 例如 `https://vkj.example.com`，插件自动补 `/api/v1` |
+| `api_token` | 需要项目、任务、标签、过滤器读写权限；不要在聊天里发送 |
+| `default_project` | 默认 `Inbox`，杂事的落点 |
+| `allowed_qq_sender_ids` | 仅限制 QQ 官方机器人私聊发送者，`weixin_oc` 不检查 |
+| `timezone` | 同时作为 Vikunja 服务端 `now/d` 这类相对日期的 `filter_timezone` |
+| `reminder_minutes` | 只对"有截止时间但没单独设提醒"的任务生效 |
+| `briefing_enabled` / `briefing_time` / `briefing_use_llm` | 早报开关、时间（默认 07:30）、是否用模型润色 |
+| `work_windows` | 排块默认可用时段，默认 `09:00-12:00,14:00-18:00,19:30-22:00` |
+| `default_block_minutes` | 没有 `est*` 标签时的默认块长，默认 30 |
+| `poll_interval_seconds` / `request_timeout_seconds` / `max_list_items` | 轮询、超时、列表长度 |
 
-将本目录放入 AstrBot 的 `data/plugins/astrbot_plugin_vikunja`，安装 `requirements.txt` 后重载插件。AstrBot 最低版本为 `4.22.1`，建议使用当前最新版。
+## 第一次使用
 
-在 WebUI 中配置：
+```text
+/todo diag            # 确认能连上、版本、结构是否齐全
+/todo setup full      # 建标签 + 8 个跨项目看板 +（full 时）项目骨架 PhD/实习/生活
+/todo board           # 拿到各看板的网页链接
+/todo guide           # 三个维度速查
+```
 
-1. `vikunja_url`：Vikunja 地址，插件自动补全 `/api/v1`。
-2. `api_token`：具有项目读取、任务读取和任务写入权限的 API Token。
-3. `default_project`：默认 `Inbox`，也可填写完整路径或项目 ID。
-4. `allowed_qq_sender_ids`：可选，仅限制 QQ 官方机器人私聊发送者；`weixin_oc` 不检查此项。
-5. `timezone`、提前提醒分钟数、轮询间隔和列表长度。
-
-插件通过 AstrBot KV 存储已登记的 QQ/微信私聊渠道、自定义提醒阈值和提醒去重记录。Token 不会经过聊天传输。
+`/todo setup` 是幂等的，可以重复执行；已存在的标签、过滤器会跳过。`full` 会额外创建
+`Inbox`、`PhD/课题一二三`、`实习/项目一二`、`生活/购物与家务、长期与学习`，不需要就用
+`/todo setup`。建好后建议在 Vikunja 设置里把 `☀️ 今天` 设为首页过滤器。
 
 ## 命令
 
-命令主要用于精确操作和排障；日常使用可以直接自然语言交流。
-
 ```text
-/todo projects
-/todo add 买牛奶 --due "明天 18:00"
-/todo add 修改论文引言 --project "fudan-work/SMX/paper" --due "周日 20:00" --priority 4
-/todo add 每日复盘 --project personal-project --due "今天 22:00" --repeat daily --remind 1h
+/todo agenda                            今日议程（逾期/时间块/到期/等人/没排期）
+/todo plan 14:00-18:00 --apply          按可用时间排块并写回；不加 --apply 只给建议
+/todo add 买牛奶 --label @外出
+/todo add 写引言 --project "PhD/课题一" --start "2026-09-21T09:00" --end "2026-09-21T11:00" --label est2h,@深度
+/todo add 交周报 --due "2026-09-21T18:00" --remind 30m --priority 4
+/todo add 每日复盘 --due "今天 22:00" --repeat daily
 /todo done 123
 /todo today
-/todo list week
-/todo list overdue --project "fudan-work/SMX/paper"
-/todo list all
+/todo list week|overdue|unscheduled|waiting|scheduled [--project P]
+/todo projects
+/todo local | /todo snooze Lxxx 30分钟后 | /todo pause Lxxx
 /todo remind off
 /todo help
 ```
 
-项目选择器支持项目 ID、唯一名称或完整路径。时间支持 `明天9点`、`周日 20:00`、`2小时后`、`2026-07-12 18:00`。带空格的参数需使用引号。
+时间推荐 ISO `2026-09-20T18:00`，也支持 `明天9点`、`下周三下午3点`、`今晚8点半`、`2小时后`、
+`9/20 18:00`。带空格的参数要加引号。项目选择器支持 ID、唯一名称或完整路径。
 
 ## 私聊限制
 
-`/todo` 指令组使用 AstrBot 的 `PRIVATE_MESSAGE` 过滤器。所有执行读写的内部方法还会检查 `event.get_group_id()` 和平台类型，防止 LLM Tool 或其他调用路径绕过过滤器。QQ 官方机器人额外检查 `allowed_qq_sender_ids`；微信 `weixin_oc` 私聊始终放行，不受 QQ 白名单影响。
+`/todo` 使用 AstrBot 的 `PRIVATE_MESSAGE` 过滤器；所有读写方法还会再检查
+`event.get_group_id()` 和平台类型，防止 LLM Tool 绕过。QQ 官方机器人额外检查
+`allowed_qq_sender_ids`（留空表示不校验），微信 `weixin_oc` 私聊始终放行。
 
-QQ 群即使安装了插件也不能读取或修改 Vikunja。如果同一个 QQ 官方机器人还承担其他功能，其他插件仍可正常处理群聊。
+## 主动推送的限制
 
-QQ 白名单默认留空。需要时可用 AstrBot 内置 `/sid` 和日志中的 `get_sender_id()` 确认 QQ UID。即使只填写你的 QQ UID，微信 `weixin_oc` 仍可正常使用。
+早报与提醒通过 `context.send_message` 主动下发。AstrBot 侧对 `weixin_oc` 直接按用户下发；
+QQ 官方机器人私聊也允许主动消息，但腾讯对主动消息有配额与审核限制，实际到达率需要你实机验证。
+早报只在设定时间后两小时内补发一次，错过不追；提醒不重放 12 小时以前的时刻，避免停机后刷屏。
+`/todo remind off` 会同时关闭当前入口的提醒与早报。
 
-## 项目与查询
+## Vikunja API 使用范围
 
-`/todo projects` 会根据 Vikunja 的 `parent_project_id` 展示完整层级，例如：
+对照你自己服务器的 `GET /api/v1/docs.json`（已在 v2.5.0 上核对）：
 
-```text
-📁 Vikunja 项目树
-• Inbox (#1)
-• fudan-work (#2)
-  • SMX (#3)
-    • paper (#4)
-• personal-project (#5)
-```
+- `GET /projects`（含负 ID 的 saved filter 伪项目）、`PUT /projects`
+- `GET /tasks`（服务端 `filter` + `filter_timezone` + date math，`per_page=50`）
+- `PUT /projects/{id}/tasks`、`GET|POST|DELETE /tasks/{id}`
+- `GET|PUT /labels`、`PUT|DELETE /tasks/{id}/labels`
+- `PUT /tasks/{id}/relations`、`PUT /tasks/{id}/comments`
+- `PUT|POST /filters`、`GET /projects/{id}/views`、`POST /projects/{id}/views/{view}`
+- `GET /info`（版本与分页上限探测）
 
-`today`、`week`、`overdue` 和 `all` 默认跨所有项目查询，结果包含项目路径，并按优先级降序、截止时间升序排列。使用 `--project` 可以限定到具体项目。
+saved filter 的伪项目 ID 关系是 `project_id = filter_id * -1 - 1`（`models/saved_filters.go`），
+插件按此换算来配置它的 Kanban 分列。
 
-## Vikunja API
+## 已知的不确定点
 
-实现依据所附 Vikunja OpenAPI v2.3.0：
-
-- `GET /projects` 获取项目和父子关系
-- `PUT /projects/{id}/tasks` 创建任务
-- `GET /tasks` 跨项目查询并分页
-- `GET /tasks/{id}`、`POST /tasks/{id}` 完成任务
-- `repeat_after`、`repeat_mode` 设置重复规则
+- `percent_done` 按 0–1 小数写入（前端按百分比显示）。如果你的实例显示成 `0.5%`，
+  改 `main.py` 里 `changes["percent_done"]` 的除以 100 即可。
+- `📥 没排期` 与总看板的"没排期"列依赖 `filter_include_nulls` 取空值的技巧，
+  不同版本表现可能不同；如果不准，在网页上改这一条过滤器即可，其他不受影响。
 
 ## 测试
 
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+65 个用例覆盖时间解析、议程分组、贪心排块、bootstrap 幂等性、客户端请求构造、提醒去重，
+以及工具层的端到端流程（用内存假 Vikunja）。

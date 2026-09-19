@@ -1,13 +1,14 @@
 {
   "astrbot_plugin_vikunja": {
-    "display_name": "Vikunja 待办助手",
-    "desc": "单用户通过 QQ 与微信私聊共享 Vikunja 项目、任务和临期提醒的私人秘书。",
+    "display_name": "Vikunja 秘书大脑",
+    "desc": "单用户的 Vikunja 私人秘书：聊天里记录与安排、跨项目看板与甘特图、每日早报与任务提醒。",
     "author": "Marshall",
     "repo": "https://github.com/Makarov3821/astrbot_plugin_vikunja",
     "tags": [
       "vikunja",
       "todo",
       "reminder",
+      "planner",
       "productivity"
     ],
     "social_link": "https://github.com/Makarov3821",
