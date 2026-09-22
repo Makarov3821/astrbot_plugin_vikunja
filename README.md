@@ -14,31 +14,60 @@ Vikunja 里的 project 只显示自己的任务，父项目不会聚合子项目
 | 维度 | 用途 | 谁来维护 |
 | --- | --- | --- |
 | project | 这件事属于谁：课题、实习项目、生活杂事 | 你，偶尔调整 |
-| label | 什么场景能做、要多久：`@深度` `@碎片` `@外出` `@要找人` `@等待中`、`est15`~`est4h` | 秘书自动带上 |
+| label | 什么场景能做、要多久：`@深度` `@碎片` `@外出` `@要找人` `@等待中`、`est15`~`est4h` | 秘书自动带上，猜错你纠正 |
 | 日期 | `due_date` 只写真死线；`start_date`/`end_date` 是"打算什么时候做"的时间块；`reminders` 决定什么时候响铃 | 秘书每天改 |
+
+任务内部还有三个字段也被用起来了：
+
+| 字段 | 用途 |
+| --- | --- |
+| `description` | **说明书**：这件事是什么、怎么做、做到什么算完。一行 `- [ ] 步骤` 会变成网页任务卡上的清单进度 |
+| 评论 | **流水日志**：某天顺延了、卡在哪、今天推进到哪。说明书和日志不混写 |
+| `percent_done` | 进度百分比；完成子任务时父任务进度自动按"已完成/全部子任务"更新 |
+| `repeat_after`/`repeat_mode` | 固定日历节奏用 `weekly`/`monthly`；习惯保养类用"从完成那天重算"，拖几天不会连着弹 |
+
+有节奏的事不该每次新建一条。说「每周日浇花」「每天看一下计算跑得怎么样」「每月 5 号交月报」，
+插件会自己认出节奏并建成**一条重复任务**：
+
+| 说法 | 变成 | 重复模式 |
+| --- | --- | --- |
+| 每周日浇花 | 首次到期 = 下一个周日，`repeat_after=7d` | 锚定星期几，完成后跳到下个周日 |
+| 每月 5 号交月报 | 首次到期 = 下个 5 号，`repeat_mode=monthly` | 锚定日期 |
+| 每天看一下计算 | 首次到期 = 今天，`repeat_after=1d` | 锚定日历 |
+| 每隔三天浇花 / 隔天跑步 | `repeat_after=3d`，`repeat_mode=2` | 从**完成那天**重算，拖几天不会连着弹 |
+
+Vikunja 本身没有"重复到某天为止"，所以结束约定由插件自己管：它以一句普通话写在描述里
+（`🔁 重复至 2026-10-31`），在网页上看得见、也能直接改。到期后插件自动清掉重复规则、
+在任务里留一条评论并在聊天里通知你一次。结束条件也可以是一句话（`🔁 重复直到：计算跑完`），
+这种不会自动停，但每次提醒都会带上它提示你确认。
 
 跨项目的大图由 **saved filter** 提供，它在 Vikunja 里是虚拟项目，自带 List / Table / Kanban /
 Gantt 四个视图。`/todo setup` 会一次性建好：
 
 - `☀️ 今天`：今天到期、已逾期，或今天排了时间块 —— 建议在 Vikunja 设置里设为首页过滤器
-- `⏰ 逾期`、`🗓 本周`、`⏳ 等待中`、`🚶 出门顺手`、`📥 没排期`
+- `⏰ 逾期`、`🗓 本周`、`⏳ 等待中`、`🚶 出门顺手`、`🔨 进行中`、`📥 没排期`
 - `🧭 总看板`：Kanban 视图，按 `等待中 / 今天 / 本周 / 以后 / 没排期` 自动分列（filter buckets，不用手动拖）
 - `📈 时间线`：Gantt 视图，跨项目时间轴，子任务分组、依赖关系显示为箭头
 
 ## 秘书能做的事
 
 - 记录：「这周要把课题一的引言重写一下」→ 建任务，不强迫设死线
+- 节奏：「每周日浇花」→ 自动建成每周日到期的重复任务，并追问重复到什么时候结束
 - 安排：「帮我排一下今天」「我下午有两小时」→ 读今日候选、按 `est*` 估时贪心排块，写回 `start_date`/`end_date`，网页甘特图立刻可见，已排的块不会被占两次
 - 改期：「来不及了，挪到周三」→ 改 `due`/`start` 并可在任务评论里留一句原因，而不是新建一条重复任务
-- 拆解：「把这篇论文拆一下」→ 建子任务（`parenttask` 关系），必要时用 `blocked`/`precedes` 表达依赖
+- 拆解：「把这篇论文拆一下」→ 建子任务（`parenttask` 关系），必要时用 `blocked`/`precedes` 表达依赖；
+  只有两三步的小事写进描述里的清单就够
+- 说明书：「这个任务的验收标准是 X」→ 写进 `description`，默认追加不覆盖；`- [ ] 步骤` 在网页卡片上显示 1/3
+- 进度：「引言写了一半」→ `percent_done=50`，`🔨 进行中` 看板和早报都会优先提它
+- 标签：模型忘记带标签时，插件按标题猜一个 `est*` + 一个场景标签并在回复里说明，不会留下裸任务
 - 等待：「等师兄给数据」→ 打 `@等待中`，它就不占今天的清单，但会留在等待中看板里
 - 提醒：任务自带的 `reminders`（含"相对 due 提前 N 分钟"）会推送到聊天里；**你在 Vikunja 网页上设的提醒同样会推**
 - 早报：每天一次（默认 07:30）推送今日议程，可选用模型润色成人话；其余时间你主动问就行
 
 LLM 工具：`vikunja_list_projects`、`vikunja_create_project`、`vikunja_create_task`、
-`vikunja_update_task`、`vikunja_complete_task`、`vikunja_delete_task`、`vikunja_query_tasks`、
-`vikunja_agenda`、`vikunja_plan_day`、`vikunja_add_subtask`、`vikunja_link_tasks`、
-`vikunja_comment`。需要为该会话启用支持 Tool Calling 的模型；模型未启用工具调用时自然语言不会
+`vikunja_update_task`、`vikunja_task_detail`、`vikunja_complete_task`、`vikunja_delete_task`、
+`vikunja_query_tasks`、`vikunja_agenda`、`vikunja_plan_day`、`vikunja_add_subtask`、
+`vikunja_link_tasks`、`vikunja_comment`。需要为该会话启用支持 Tool Calling 的模型；模型未启用工具调用时自然语言不会
 写入 Vikunja，斜杠命令不受影响。
 
 Vikunja 写入失败时（网络中断、Token 失效），创建请求会落到本地 KV 作为降级缓冲（`L` 开头的 ID），
@@ -76,6 +105,7 @@ WebUI 插件配置项：
 | `briefing_enabled` / `briefing_time` / `briefing_use_llm` | 早报开关、时间（默认 07:30）、是否用模型润色 |
 | `work_windows` | 排块默认可用时段，默认 `09:00-12:00,14:00-18:00,19:30-22:00` |
 | `default_block_minutes` | 没有 `est*` 标签时的默认块长，默认 30 |
+| `default_due_time` | 自动建立重复任务时首次到期的时刻，默认 `21:00` |
 | `poll_interval_seconds` / `request_timeout_seconds` / `max_list_items` | 轮询、超时、列表长度 |
 
 ## 第一次使用
@@ -96,7 +126,12 @@ WebUI 插件配置项：
 ```text
 /todo agenda                            今日议程（逾期/时间块/到期/等人/没排期）
 /todo plan 14:00-18:00 --apply          按可用时间排块并写回；不加 --apply 只给建议
+/todo labels                            标签用量，以及还没打标签的任务
 /todo add 买牛奶 --label @外出
+/todo add 写引言 --desc "目标：重写引言
+- [ ] 列大纲
+- [ ] 找三篇对照文献"
+/todo add 浇花 --due "2026-09-23T09:00" --repeat 3d --from-completion
 /todo add 写引言 --project "PhD/课题一" --start "2026-09-21T09:00" --end "2026-09-21T11:00" --label est2h,@深度
 /todo add 交周报 --due "2026-09-21T18:00" --remind 30m --priority 4
 /todo add 每日复盘 --due "今天 22:00" --repeat daily
@@ -142,10 +177,10 @@ saved filter 的伪项目 ID 关系是 `project_id = filter_id * -1 - 1`（`mode
 
 ## 已知的不确定点
 
-- `percent_done` 按 0–1 小数写入（前端按百分比显示）。如果你的实例显示成 `0.5%`，
-  改 `main.py` 里 `changes["percent_done"]` 的除以 100 即可。
 - `📥 没排期` 与总看板的"没排期"列依赖 `filter_include_nulls` 取空值的技巧，
   不同版本表现可能不同；如果不准，在网页上改这一条过滤器即可，其他不受影响。
+- `🔨 进行中` 用 `percent_done > 0` 过滤。Vikunja 的 `percent_done` 在 API 里是 0–1 小数
+  （`models/tasks.go`: `between 0 and 1`），插件按此写入；网页过滤器界面里显示的是百分比。
 
 ## 测试
 
@@ -153,5 +188,7 @@ saved filter 的伪项目 ID 关系是 `project_id = filter_id * -1 - 1`（`mode
 python -m unittest discover -s tests -v
 ```
 
-65 个用例覆盖时间解析、议程分组、贪心排块、bootstrap 幂等性、客户端请求构造、提醒去重，
-以及工具层的端到端流程（用内存假 Vikunja）。
+115 个用例覆盖时间解析、议程分组、贪心排块、bootstrap 幂等性、客户端请求构造、提醒去重、
+描述 HTML 与清单进度、标签猜测、节奏识别与首次到期锚定、重复结束约定的写入与自动收尾、
+父任务进度回滚，以及工具层的端到端流程（用内存假 Vikunja）。`tests/test_tool_schema.py` 还会用 AstrBot 实际使用的 `docstring_parser`
+校验每个 LLM 工具的参数声明。

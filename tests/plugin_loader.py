@@ -7,7 +7,7 @@ import logging
 import shlex
 import sys
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 
 from state_store import StateStore
@@ -58,6 +58,7 @@ def load_plugin_class():
         "MessageChain": FakeMessageChain,
         "bootstrap": bootstrap_module,
         "datetime": datetime,
+        "dtime": dtime,
         "timedelta": timedelta,
         "timezone": timezone,
         "Any": object,

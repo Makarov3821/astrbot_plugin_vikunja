@@ -14,7 +14,10 @@ from zoneinfo import ZoneInfo
 
 from .todo_domain import (
     LABEL_WAITING,
+    checklist_progress,
     estimate_minutes,
+    format_percent,
+    format_repeat,
     format_task_line,
     from_vikunja_time,
     has_label,
@@ -33,6 +36,8 @@ class Agenda:
     due_soon: list[dict[str, Any]] = field(default_factory=list)
     waiting: list[dict[str, Any]] = field(default_factory=list)
     unscheduled: list[dict[str, Any]] = field(default_factory=list)
+    # Cross-cutting view: anything with progress > 0 that is not finished yet.
+    in_progress: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
@@ -91,7 +96,29 @@ def split_agenda(
             -int(task.get("priority") or 0),
         )
     )
+    agenda.in_progress = sorted(
+        (
+            task
+            for task in tasks
+            if not task.get("done")
+            and _progress_started(task)
+            and not has_label(task, LABEL_WAITING)
+        ),
+        key=task_sort_key,
+    )
     return agenda
+
+
+def _progress_started(task: dict[str, Any]) -> bool:
+    """Something was already done on this task: percent_done or a ticked checklist."""
+    try:
+        percent = float(task.get("percent_done") or 0)
+    except (TypeError, ValueError):
+        percent = 0.0
+    if percent > 0:
+        return True
+    checked, _ = checklist_progress(str(task.get("description") or ""))
+    return checked > 0
 
 
 def format_agenda(
@@ -134,9 +161,22 @@ def agenda_digest(
         for task in tasks:
             due = from_vikunja_time(task.get("due_date"))
             start = from_vikunja_time(task.get("start_date"))
+            description = str(task.get("description") or "")
+            checked, total = checklist_progress(description)
+            extras = []
+            percent = format_percent(task)
+            if percent:
+                extras.append(f"进度={percent}")
+            if total:
+                extras.append(f"清单={checked}/{total}")
+            repeat = format_repeat(task)
+            if repeat:
+                extras.append(f"重复={repeat}")
+            if description and not total:
+                extras.append("有描述")
             rows.append(
                 "#{id} {title} | 项目={project} | 优先级=P{priority} | 截止={due} | "
-                "时间块={start} | 估时={est}分钟 | 标签={labels}".format(
+                "时间块={start} | 估时={est}分钟 | 标签={labels}{extras}".format(
                     id=task.get("id"),
                     title=task.get("title", ""),
                     project=(project_paths or {}).get(
@@ -149,6 +189,7 @@ def agenda_digest(
                     else "无",
                     est=estimate_minutes(task),
                     labels=",".join(task_labels(task)) or "无",
+                    extras=(" | " + " | ".join(extras)) if extras else "",
                 )
             )
         return "\n".join(rows) if rows else "（无）"
@@ -159,7 +200,8 @@ def agenda_digest(
         f"今天到期：\n{render(agenda.due_today)}\n"
         f"近几天到期：\n{render(agenda.due_soon)}\n"
         f"等别人：\n{render(agenda.waiting)}\n"
-        f"没排期：\n{render(agenda.unscheduled)}"
+        f"没排期：\n{render(agenda.unscheduled)}\n"
+        f"已经动过手但没做完（优先续上，不要重新开新的）：\n{render(agenda.in_progress)}"
     )
 
 
@@ -279,11 +321,13 @@ def plan_blocks(
 
 def planning_candidates(agenda: Agenda) -> list[dict[str, Any]]:
     """What is worth putting into today's plan, most urgent first."""
-    seen: set[int] = set()
+    # Tasks that already own a block today must not be scheduled a second time.
+    seen: set[int] = {int(task.get("id") or 0) for task in agenda.blocks}
     ordered: list[dict[str, Any]] = []
     for group in (
         agenda.overdue,
         agenda.due_today,
+        agenda.in_progress,
         agenda.due_soon,
         agenda.unscheduled,
     ):

@@ -82,5 +82,11 @@
     "type": "int",
     "hint": "任务没有 est 标签时按这个时长排块。",
     "default": 30
+  },
+  "default_due_time": {
+    "description": "重复任务默认到期时刻",
+    "type": "string",
+    "hint": "自动建立重复任务（如“每周日浇花”）时，首次到期用这个时刻，24 小时制 HH:MM。",
+    "default": "21:00"
   }
 }

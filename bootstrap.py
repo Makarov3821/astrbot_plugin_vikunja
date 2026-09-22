@@ -122,6 +122,13 @@ FILTER_SPECS: tuple[FilterSpec, ...] = (
         description="出门前问秘书一句就能拿到的清单。",
     ),
     FilterSpec(
+        title="🔨 进行中",
+        filter_query="done = false && percent_done > 0",
+        description="已经动过手但还没做完的事，优先续上而不是开新的。",
+        sort_by=("percent_done", "due_date"),
+        order_by=("desc", "asc"),
+    ),
+    FilterSpec(
         title="📥 没排期",
         filter_query=f"done = false && {NO_DATE_QUERY}",
         description="既没有死线也没有时间块的事，别让它无声堆积。",
@@ -333,7 +340,14 @@ def structure_help() -> str:
         "1) 项目 = 这件事属于谁（PhD/课题、实习/项目、生活/杂事）",
         "2) 标签 = 什么场景能做 + 要多久："
         + "、".join(spec.title for spec in LABEL_SPECS),
+        "   估时标签决定排块时长；不带标签的任务只能按默认 30 分钟排，也不会出现在按场景筛的看板里。",
         "3) 日期 = due_date 只填真死线，start_date/end_date 是打算什么时候做",
+        "",
+        "任务内部还有三个字段值得用起来：",
+        "• 描述 = 说明书（这件事怎么做、做到什么算完）。一行 `- [ ] 步骤` 会变成网页卡片上的清单进度",
+        "• 评论 = 流水日志（某天顺延了、卡在哪、推进到哪），和说明书分开",
+        "• 进度 percent_done = 百分比；完成子任务时父任务进度自动按比例更新",
+        "• 重复 = 固定日历节奏用 monthly/weekly；习惯保养类用“从完成那天重算”，拖几天不会连着弹",
         "",
         "跨项目的大看板靠“保存的过滤器”，项目页面只会显示自己的任务：",
     ]

@@ -56,7 +56,37 @@ class FakeVikunja:
         return dict(task)
 
     async def get_task(self, task_id):
-        return dict(self.tasks[int(task_id)])
+        task = dict(self.tasks[int(task_id)])
+        task["related_tasks"] = self._related(int(task_id))
+        return task
+
+    def _related(self, task_id):
+        """Mirror Vikunja's related_tasks map, including the inverse relations."""
+        inverse = {
+            "parenttask": "subtask",
+            "subtask": "parenttask",
+            "blocked": "blocking",
+            "blocking": "blocked",
+            "precedes": "follows",
+            "follows": "precedes",
+            "related": "related",
+        }
+        grouped: dict[str, list[dict]] = {}
+        for source, other, kind in self.relations:
+            if int(source) == task_id:
+                grouped.setdefault(kind, []).append(dict(self.tasks[int(other)]))
+            elif int(other) == task_id:
+                grouped.setdefault(inverse[kind], []).append(
+                    dict(self.tasks[int(source)])
+                )
+        return grouped
+
+    async def list_comments(self, task_id):
+        return [
+            {"id": index, "comment": text, "created": "2026-09-22T10:00:00Z"}
+            for index, (target, text) in enumerate(self.comments, 1)
+            if int(target) == int(task_id)
+        ]
 
     async def update_task(self, task_id, changes):
         task = self.tasks[int(task_id)]
@@ -232,6 +262,115 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(blocks), 2)
         starts = sorted(task["start_date"] for task in blocks)
         self.assertNotEqual(starts[0], starts[1])
+
+    async def test_labels_are_guessed_when_the_model_forgets_them(self):
+        result = await self.plugin.vikunja_create_task(self.event, "下班去便利店买牛奶")
+        self.assertIn("标签是按标题猜的", result)
+        task = list(self.plugin.client.tasks.values())[0]
+        self.assertEqual(
+            [label["title"] for label in task["labels"]], ["est15", "@外出"]
+        )
+
+    async def test_unguessable_title_reports_that_it_has_no_labels(self):
+        result = await self.plugin.vikunja_create_task(self.event, "zzz")
+        self.assertIn("没有任何标签", result)
+
+    async def test_description_is_stored_as_html_and_appended(self):
+        await self.plugin.vikunja_create_task(
+            self.event, "写引言", description="目标：重写引言\n- [ ] 列大纲"
+        )
+        task_id = next(iter(self.plugin.client.tasks))
+        stored = self.plugin.client.tasks[task_id]["description"]
+        self.assertIn("<p>目标：重写引言</p>", stored)
+        self.assertIn('data-checked="false"', stored)
+
+        await self.plugin.vikunja_update_task(
+            self.event, task_id, description="- [ ] 找三篇对照文献"
+        )
+        appended = self.plugin.client.tasks[task_id]["description"]
+        self.assertIn("列大纲", appended)
+        self.assertIn("找三篇对照文献", appended)
+
+        await self.plugin.vikunja_update_task(
+            self.event,
+            task_id,
+            description="只留这一句",
+            description_mode="replace",
+        )
+        replaced = self.plugin.client.tasks[task_id]["description"]
+        self.assertEqual(replaced, "<p>只留这一句</p>")
+
+    async def test_repeat_can_be_changed_and_counted_from_completion(self):
+        await self.plugin.vikunja_create_task(
+            self.event,
+            "浇花",
+            due="2026-09-23T09:00",
+            repeat="3d",
+            repeat_from_completion=True,
+        )
+        task_id = next(iter(self.plugin.client.tasks))
+        task = self.plugin.client.tasks[task_id]
+        self.assertEqual(task["repeat_after"], 259200)
+        self.assertEqual(task["repeat_mode"], 2)
+
+        result = await self.plugin.vikunja_update_task(
+            self.event, task_id, repeat="weekly"
+        )
+        self.assertIn("重复 每周", result)
+        self.assertEqual(self.plugin.client.tasks[task_id]["repeat_after"], 604800)
+        self.assertEqual(self.plugin.client.tasks[task_id]["repeat_mode"], 0)
+
+        await self.plugin.vikunja_update_task(self.event, task_id, repeat="none")
+        self.assertEqual(self.plugin.client.tasks[task_id]["repeat_after"], 0)
+
+    async def test_finishing_subtasks_rolls_progress_up_to_the_parent(self):
+        await self.plugin.vikunja_create_task(
+            self.event, "写论文", project="PhD/课题一"
+        )
+        parent_id = next(iter(self.plugin.client.tasks))
+        await self.plugin.vikunja_add_subtask(self.event, parent_id, "列引言大纲")
+        await self.plugin.vikunja_add_subtask(self.event, parent_id, "写初稿")
+        children = [
+            task_id for task_id in self.plugin.client.tasks if task_id != parent_id
+        ]
+        self.assertEqual(self.plugin.client.tasks[parent_id].get("percent_done", 0), 0)
+
+        result = await self.plugin.vikunja_complete_task(self.event, children[0])
+        self.assertIn("进度更新为 50%", result)
+        self.assertEqual(self.plugin.client.tasks[parent_id]["percent_done"], 0.5)
+
+        await self.plugin.vikunja_complete_task(self.event, children[1])
+        self.assertEqual(self.plugin.client.tasks[parent_id]["percent_done"], 1.0)
+
+    async def test_task_detail_shows_description_relations_and_comments(self):
+        await self.plugin.vikunja_create_task(
+            self.event,
+            "写论文",
+            project="PhD/课题一",
+            description="目标：投出去\n- [x] 大纲\n- [ ] 初稿",
+        )
+        parent_id = next(iter(self.plugin.client.tasks))
+        await self.plugin.vikunja_add_subtask(self.event, parent_id, "写初稿")
+        await self.plugin.vikunja_comment(self.event, parent_id, "今天推进了大纲")
+        detail = await self.plugin.vikunja_task_detail(self.event, parent_id)
+        self.assertIn("目标：投出去", detail)
+        self.assertIn("[x] 大纲", detail)
+        self.assertIn("清单 1/2", detail)
+        self.assertIn("子任务：", detail)
+        self.assertIn("写初稿", detail)
+        self.assertIn("今天推进了大纲", detail)
+
+    async def test_progress_reaches_the_prompt_as_in_progress_work(self):
+        await self.plugin.vikunja_create_task(
+            self.event, "写引言", project="PhD/课题一"
+        )
+        task_id = next(iter(self.plugin.client.tasks))
+        await self.plugin.vikunja_update_task(self.event, task_id, percent_done=40)
+        req = types.SimpleNamespace(system_prompt="")
+        await self.plugin.on_llm_request(self.event, req)
+        self.assertIn("已经动过手但没做完", req.system_prompt)
+        self.assertIn("进度=40%", req.system_prompt)
+        self.assertIn("现有标签与当前用量", req.system_prompt)
 
     async def test_comment_and_query_and_group_guard(self):
         await self.plugin.vikunja_create_task(self.event, "买牛奶")

@@ -2,7 +2,7 @@ name: astrbot_plugin_vikunja
 display_name: Vikunja 秘书大脑
 desc: 单用户的 Vikunja 私人秘书：聊天里记录与安排、跨项目看板与甘特图、每日早报与任务提醒。
 short_desc: 聊天驱动的 Vikunja 私人秘书。
-version: v0.5.0
+version: v0.6.0
 author: Marshall
 repo: "https://github.com/Makarov3821/astrbot_plugin_vikunja"
 astrbot_version: ">=4.22.1,<5"

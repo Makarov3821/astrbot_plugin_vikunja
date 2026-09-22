@@ -44,7 +44,7 @@ def llm_tool_functions():
 class ToolSchemaTests(unittest.TestCase):
     def test_every_tool_declares_a_description_and_typed_arguments(self):
         tools = list(llm_tool_functions())
-        self.assertGreaterEqual(len(tools), 12)
+        self.assertGreaterEqual(len(tools), 13)
         for node in tools:
             with self.subTest(tool=node.name):
                 parsed = docstring_parser.parse(ast.get_docstring(node) or "")
