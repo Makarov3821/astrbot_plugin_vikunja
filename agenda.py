@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from .todo_domain import (
     LABEL_WAITING,
+    block_covers_day,
     checklist_progress,
     estimate_minutes,
     format_percent,
@@ -21,6 +22,7 @@ from .todo_domain import (
     format_task_line,
     from_vikunja_time,
     has_label,
+    is_time_block,
     task_labels,
     task_sort_key,
 )
@@ -64,13 +66,11 @@ def split_agenda(
         if task.get("done"):
             continue
         due = from_vikunja_time(task.get("due_date"))
-        start = from_vikunja_time(task.get("start_date"))
         local_due = due.astimezone(tz) if due else None
-        local_start = start.astimezone(tz) if start else None
         if has_label(task, LABEL_WAITING):
             agenda.waiting.append(task)
             continue
-        if local_start and local_start.date() == today:
+        if is_time_block(task, tz) and block_covers_day(task, tz, today):
             agenda.blocks.append(task)
             continue
         if local_due and local_due < now:
@@ -82,7 +82,8 @@ def split_agenda(
         if local_due and local_due.date() <= today + timedelta(days=soon_days):
             agenda.due_soon.append(task)
             continue
-        if not local_due and not local_start:
+        if not local_due and not is_time_block(task, tz):
+            # A bare start_date anchor only exists to draw a Gantt bar.
             agenda.unscheduled.append(task)
     agenda.overdue.sort(key=task_sort_key)
     agenda.due_today.sort(key=task_sort_key)
@@ -250,7 +251,7 @@ def busy_intervals(
     intervals: list[tuple[datetime, datetime]] = []
     for task in tasks:
         start = from_vikunja_time(task.get("start_date"))
-        if not start:
+        if not start or not is_time_block(task, tz):
             continue
         local_start = start.astimezone(tz)
         if local_start.date() != day.date():

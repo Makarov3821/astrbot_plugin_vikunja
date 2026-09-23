@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import shlex
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -1080,12 +1080,18 @@ def scope_filter_query(scope: str) -> tuple[str, bool]:
     if scope == "overdue":
         return "due_date < now", False
     if scope == "today":
-        return "due_date < now/d+1d || start_date < now/d+1d", False
+        return TODAY_FILTER_QUERY, False
     if scope == "week":
         return "due_date < now/w+1w || start_date < now/w+1w", False
     if scope == "scheduled":
-        return "start_date > now/d && start_date < now/d+1d", False
+        return BLOCK_TODAY_FILTER_QUERY, False
     return "", False
+
+
+# A task belongs to "today" when it is due (or overdue), or when its time block
+# covers today. Requiring end_date keeps the plain "start today" Gantt anchor out.
+BLOCK_TODAY_FILTER_QUERY = "start_date < now/d+1d && end_date > now/d"
+TODAY_FILTER_QUERY = f"due_date < now/d+1d || ({BLOCK_TODAY_FILTER_QUERY})"
 
 
 def select_tasks(
@@ -1101,30 +1107,34 @@ def select_tasks(
         if task.get("done"):
             continue
         due = from_vikunja_time(task.get("due_date"))
-        start = from_vikunja_time(task.get("start_date"))
         local_due = due.astimezone(tz) if due else None
-        local_start = start.astimezone(tz) if start else None
+        blocked_today = is_time_block(task, tz) and block_covers_day(task, tz, today)
         if scope == "today":
-            if not (
-                (local_due and local_due.date() <= today)
-                or (local_start and local_start.date() <= today)
-            ):
+            if not ((local_due and local_due.date() <= today) or blocked_today):
                 continue
         elif scope == "overdue":
             if not local_due or local_due >= now:
                 continue
         elif scope == "week":
             horizon = today + timedelta(days=7)
+            block_start = from_vikunja_time(task.get("start_date"))
+            local_block = (
+                block_start.astimezone(tz).date()
+                if block_start and is_time_block(task, tz)
+                else None
+            )
             if not (
                 (local_due and local_due.date() <= horizon)
-                or (local_start and local_start.date() <= horizon)
+                or (local_block and local_block <= horizon)
             ):
                 continue
         elif scope == "scheduled":
-            if not local_start or local_start.date() != today:
+            if not blocked_today:
                 continue
         elif scope == "unscheduled":
-            if local_due or local_start:
+            # A bare start_date anchor (added for the Gantt chart) does not count
+            # as scheduled: only a real deadline or a real time block does.
+            if local_due or is_time_block(task, tz):
                 continue
         elif scope == "waiting":
             if not has_label(task, LABEL_WAITING):
@@ -1135,10 +1145,40 @@ def select_tasks(
     return sorted(result, key=task_sort_key)
 
 
+def is_time_block(task: dict[str, Any], tz: ZoneInfo) -> bool:
+    """Whether start/end describe a real scheduled slot rather than a Gantt anchor.
+
+    With ``default_start_today`` enabled every new task gets ``start_date`` at local
+    midnight so the web Gantt draws a bar. That anchor must not be mistaken for
+    "I planned to work on this at that time", otherwise the today list and the
+    planner would treat every task as already scheduled.
+    """
+    start = from_vikunja_time(task.get("start_date"))
+    if not start:
+        return False
+    if from_vikunja_time(task.get("end_date")):
+        return True
+    local_start = start.astimezone(tz)
+    return not (local_start.hour == 0 and local_start.minute == 0)
+
+
+def block_covers_day(task: dict[str, Any], tz: ZoneInfo, day: date) -> bool:
+    """True when the task's time block overlaps the given local day."""
+    start = from_vikunja_time(task.get("start_date"))
+    if not start:
+        return False
+    local_start = start.astimezone(tz).date()
+    end = from_vikunja_time(task.get("end_date"))
+    local_end = end.astimezone(tz).date() if end else local_start
+    return local_start <= day <= local_end
+
+
 def format_time_block(task: dict[str, Any], tz: ZoneInfo) -> str:
     start = from_vikunja_time(task.get("start_date"))
     end = from_vikunja_time(task.get("end_date"))
     if not start:
+        return ""
+    if not is_time_block(task, tz):
         return ""
     local_start = start.astimezone(tz)
     if end:

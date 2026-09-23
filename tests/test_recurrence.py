@@ -147,7 +147,7 @@ class FakeVikunja:
     async def list_labels(self):
         return list(self.labels)
 
-    async def create_label(self, title, hex_color=""):
+    async def create_label(self, title, hex_color="", description=""):
         self._next += 1
         label = {"id": self._next, "title": title}
         self.labels.append(label)

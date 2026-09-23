@@ -14,6 +14,7 @@ class FakeClient:
         self.projects: list[dict] = []
         self.views: dict[int, list[dict]] = {}
         self.view_updates: list[tuple[int, int, dict]] = []
+        self.updated_filters: list[dict] = []
         self._next_id = 1
 
     def _id(self) -> int:
@@ -24,8 +25,13 @@ class FakeClient:
     async def list_labels(self):
         return list(self.labels)
 
-    async def create_label(self, title, hex_color=""):
-        label = {"id": self._id(), "title": title, "hex_color": hex_color}
+    async def create_label(self, title, hex_color="", description=""):
+        label = {
+            "id": self._id(),
+            "title": title,
+            "hex_color": hex_color,
+            "description": description,
+        }
         self.labels.append(label)
         return label
 
@@ -41,6 +47,11 @@ class FakeClient:
             {"id": self._id(), "title": "Gantt", "view_kind": "gantt"},
         ]
         return {"id": filter_id, "title": title}
+
+    async def update_saved_filter(self, filter_id, title, filter_query, **kwargs):
+        record = {"id": filter_id, "title": title, "filter": filter_query, **kwargs}
+        self.updated_filters.append(record)
+        return record
 
     async def list_views(self, project_id):
         return self.views.get(project_id, [])
@@ -117,6 +128,41 @@ class BootstrapTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(report.skipped)
         # The kanban configuration is not rewritten either.
         self.assertEqual(len(client.view_updates), 1)
+
+    async def test_labels_carry_their_meaning_into_vikunja(self):
+        client = FakeClient()
+        await bootstrap.apply(client)
+        by_title = {label["title"]: label for label in client.labels}
+        # The purpose is written as the Vikunja label description, so hovering a
+        # label in the web UI explains what it is for.
+        self.assertIn("整块安静时间", by_title["@深度"]["description"])
+        self.assertIn("估时", by_title["est2h"]["description"])
+        self.assertTrue(
+            all(label["description"] for label in client.labels),
+            "every bootstrap label should explain itself",
+        )
+
+    async def test_force_updates_existing_filter_queries_and_buckets(self):
+        client = FakeClient()
+        await bootstrap.apply(client)
+        # Simulate an older version of this plugin having created a stale query.
+        stale = next(item for item in client.filters if item["title"] == "☀️ 今天")
+        stale_id = stale["id"]
+        client.updated_filters.clear()
+        client.view_updates.clear()
+
+        report = await bootstrap.apply(client, update_existing=True)
+        self.assertEqual(len(client.filters), len(bootstrap.FILTER_SPECS))
+        updated = {item["title"]: item for item in client.updated_filters}
+        self.assertIn("☀️ 今天", updated)
+        self.assertIn("end_date > now/d", updated["☀️ 今天"]["filter"])
+        self.assertEqual(
+            updated["☀️ 今天"]["id"],
+            bootstrap.saved_filter_id_from_project_id(stale_id),
+        )
+        # The auto-columns of the board are rewritten as well.
+        self.assertEqual(len(client.view_updates), 1)
+        self.assertTrue(any("查询已更新" in line for line in report.created))
 
     async def test_board_links_and_guide_mention_every_filter(self):
         client = FakeClient()

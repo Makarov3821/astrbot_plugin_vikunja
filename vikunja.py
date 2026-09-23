@@ -316,10 +316,14 @@ class VikunjaClient:
     async def list_labels(self) -> list[dict[str, Any]]:
         return await self._paged("labels")
 
-    async def create_label(self, title: str, hex_color: str = "") -> dict[str, Any]:
+    async def create_label(
+        self, title: str, hex_color: str = "", description: str = ""
+    ) -> dict[str, Any]:
         body: dict[str, Any] = {"title": title}
         if hex_color:
             body["hex_color"] = hex_color.lstrip("#")
+        if description:
+            body["description"] = description
         payload, _ = await self._request("PUT", "labels", json=body)
         return payload
 

@@ -88,5 +88,11 @@
     "type": "string",
     "hint": "自动建立重复任务（如“每周日浇花”）时，首次到期用这个时刻，24 小时制 HH:MM。",
     "default": "21:00"
+  },
+  "default_start_today": {
+    "description": "新任务默认以当天为开始日期",
+    "type": "bool",
+    "hint": "开启后新任务会写入当天 00:00 的 start_date，网页甘特图上就有一条起点。这个起点只用于画图，不会被当成“今天要做的时间块”，也不影响排程。",
+    "default": true
   }
 }

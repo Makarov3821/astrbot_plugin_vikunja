@@ -59,25 +59,42 @@ class ProjectSpec:
 
 
 LABEL_SPECS: tuple[LabelSpec, ...] = (
-    LabelSpec("@深度", "1E6FD9", "需要一整块安静时间"),
-    LabelSpec("@碎片", "4CAF50", "十几分钟能做完"),
-    LabelSpec("@外出", "FF9800", "出门时顺手办"),
-    LabelSpec("@要找人", "9C27B0", "需要联系别人"),
-    LabelSpec("@等待中", "795548", "卡在别人身上，不进今日清单"),
-    LabelSpec("est15", "B0BEC5", "预计 15 分钟"),
-    LabelSpec("est30", "90A4AE", "预计 30 分钟"),
-    LabelSpec("est1h", "78909C", "预计 1 小时"),
-    LabelSpec("est2h", "607D8B", "预计 2 小时"),
-    LabelSpec("est4h", "546E7A", "预计半天"),
+    LabelSpec(
+        "@深度",
+        "1E6FD9",
+        "场景：需要一整块安静时间，被打断就废（写论文、推导、调试）",
+    ),
+    LabelSpec(
+        "@碎片",
+        "4CAF50",
+        "场景：十几分钟能做完，排队等车时也能做（回消息、填表、浇花）",
+    ),
+    LabelSpec("@外出", "FF9800", "场景：出门时顺手办（买东西、取快递、去银行）"),
+    LabelSpec("@要找人", "9C27B0", "场景：需要联系别人才能推进（问师兄、约会议）"),
+    LabelSpec(
+        "@等待中",
+        "795548",
+        "状态：卡在别人身上，自己做不了，所以不进今天的清单，但会留在等待中看板",
+    ),
+    LabelSpec("est15", "B0BEC5", "估时：约 15 分钟，排时间块时占 15 分钟"),
+    LabelSpec("est30", "90A4AE", "估时：约 30 分钟"),
+    LabelSpec("est1h", "78909C", "估时：约 1 小时"),
+    LabelSpec("est2h", "607D8B", "估时：约 2 小时"),
+    LabelSpec("est4h", "546E7A", "估时：约半天（4 小时）"),
 )
 
 # ``{label:xxx}`` is replaced with the numeric label id, which the API requires.
 NO_DATE_QUERY = "due_date > now+50y"
 
+# Keep in sync with todo_domain.TODAY_FILTER_QUERY: a task counts as "today" when it
+# is due/overdue, or when a real time block (start *and* end) covers today. Requiring
+# end_date keeps the plain "start today" Gantt anchor out of the today boards.
+TODAY_QUERY = "due_date < now/d+1d || (start_date < now/d+1d && end_date > now/d)"
+
 FILTER_SPECS: tuple[FilterSpec, ...] = (
     FilterSpec(
         title="☀️ 今天",
-        filter_query="done = false && (due_date < now/d+1d || start_date < now/d+1d)",
+        filter_query=f"done = false && ({TODAY_QUERY})",
         description="今天到期、已逾期，或今天排了时间块的事。建议设为首页过滤器。",
         sort_by=("due_date", "priority"),
         order_by=("asc", "desc"),
@@ -98,7 +115,7 @@ FILTER_SPECS: tuple[FilterSpec, ...] = (
         description="所有项目的未完成任务，按时间自动分列。用 Kanban 视图看。",
         buckets=(
             BucketSpec("等待中", "labels in {label:@等待中}"),
-            BucketSpec("今天", "due_date < now/d+1d || start_date < now/d+1d"),
+            BucketSpec("今天", TODAY_QUERY),
             BucketSpec("本周", "due_date > now/d+1d && due_date < now/w+1w"),
             BucketSpec("以后", "due_date > now/w+1w"),
             BucketSpec("没排期", NO_DATE_QUERY, include_nulls=True),
@@ -188,16 +205,25 @@ async def ensure_labels(client: VikunjaClient, report: SetupReport) -> dict[str,
             label_ids[spec.title] = existing[key]
             report.skipped.append(f"标签 {spec.title}")
             continue
-        created = await client.create_label(spec.title, spec.hex_color)
+        created = await client.create_label(
+            spec.title, spec.hex_color, description=spec.purpose
+        )
         label_ids[spec.title] = int(created["id"])
         report.created.append(f"标签 {spec.title}")
     return label_ids
 
 
 async def ensure_saved_filters(
-    client: VikunjaClient, label_ids: dict[str, int], report: SetupReport
+    client: VikunjaClient,
+    label_ids: dict[str, int],
+    report: SetupReport,
+    update_existing: bool = False,
 ) -> dict[str, int]:
-    """Create the cross-project boards. Returns title -> pseudo project id."""
+    """Create the cross-project boards. Returns title -> pseudo project id.
+
+    ``update_existing`` rewrites the query of filters that already exist, which is
+    needed whenever this plugin changes what one of the boards means.
+    """
     existing = {
         str(item.get("title", "")): int(item["id"])
         for item in await client.list_saved_filters()
@@ -207,7 +233,25 @@ async def ensure_saved_filters(
         query = _resolve_placeholders(spec.filter_query, label_ids)
         if spec.title in existing:
             pseudo_ids[spec.title] = existing[spec.title]
-            report.skipped.append(f"过滤器 {spec.title}")
+            if update_existing:
+                filter_id = saved_filter_id_from_project_id(existing[spec.title])
+                try:
+                    await client.update_saved_filter(
+                        filter_id,
+                        spec.title,
+                        query,
+                        description=spec.description,
+                        sort_by=list(spec.sort_by),
+                        order_by=list(spec.order_by),
+                        include_nulls=spec.include_nulls,
+                    )
+                    report.created.append(f"过滤器 {spec.title}（查询已更新）")
+                except VikunjaError as exc:
+                    report.warnings.append(
+                        f"{spec.title} 的查询更新失败，可在网页上手动改：{exc}"
+                    )
+            else:
+                report.skipped.append(f"过滤器 {spec.title}")
         else:
             created = await client.create_saved_filter(
                 spec.title,
@@ -222,7 +266,12 @@ async def ensure_saved_filters(
             report.created.append(f"过滤器 {spec.title}")
         if spec.buckets:
             await _configure_filter_buckets(
-                client, spec, pseudo_ids[spec.title], label_ids, report
+                client,
+                spec,
+                pseudo_ids[spec.title],
+                label_ids,
+                report,
+                force=update_existing,
             )
     return pseudo_ids
 
@@ -233,6 +282,7 @@ async def _configure_filter_buckets(
     pseudo_project_id: int,
     label_ids: dict[str, int],
     report: SetupReport,
+    force: bool = False,
 ) -> None:
     """Turn the kanban view of a saved filter into automatic, filter-driven columns."""
     try:
@@ -248,8 +298,10 @@ async def _configure_filter_buckets(
     if not kanban:
         report.warnings.append(f"{spec.title} 没有 Kanban 视图，跳过分列配置")
         return
-    if str(kanban.get("bucket_configuration_mode")) == "filter" and kanban.get(
-        "bucket_configuration"
+    if (
+        not force
+        and str(kanban.get("bucket_configuration_mode")) == "filter"
+        and kanban.get("bucket_configuration")
     ):
         report.skipped.append(f"{spec.title} 看板分列")
         return
@@ -310,12 +362,18 @@ async def ensure_projects(client: VikunjaClient, report: SetupReport) -> None:
             report.created.append(f"项目 {spec.title}/{child}")
 
 
-async def apply(client: VikunjaClient, include_projects: bool = False) -> SetupReport:
+async def apply(
+    client: VikunjaClient,
+    include_projects: bool = False,
+    update_existing: bool = False,
+) -> SetupReport:
     report = SetupReport()
     if include_projects:
         await ensure_projects(client, report)
     label_ids = await ensure_labels(client, report)
-    pseudo_ids = await ensure_saved_filters(client, label_ids, report)
+    pseudo_ids = await ensure_saved_filters(
+        client, label_ids, report, update_existing=update_existing
+    )
     board = pseudo_ids.get("🧭 总看板")
     if board and client.web_url:
         report.board_url = f"{client.web_url}/projects/{board}"
@@ -338,18 +396,25 @@ def structure_help() -> str:
     lines = [
         "📚 秘书使用的三个维度",
         "1) 项目 = 这件事属于谁（PhD/课题、实习/项目、生活/杂事）",
-        "2) 标签 = 什么场景能做 + 要多久："
-        + "、".join(spec.title for spec in LABEL_SPECS),
-        "   估时标签决定排块时长；不带标签的任务只能按默认 30 分钟排，也不会出现在按场景筛的看板里。",
-        "3) 日期 = due_date 只填真死线，start_date/end_date 是打算什么时候做",
-        "",
-        "任务内部还有三个字段值得用起来：",
-        "• 描述 = 说明书（这件事怎么做、做到什么算完）。一行 `- [ ] 步骤` 会变成网页卡片上的清单进度",
-        "• 评论 = 流水日志（某天顺延了、卡在哪、推进到哪），和说明书分开",
-        "• 进度 percent_done = 百分比；完成子任务时父任务进度自动按比例更新",
-        "• 重复 = 固定日历节奏用 monthly/weekly；习惯保养类用“从完成那天重算”，拖几天不会连着弹",
-        "",
-        "跨项目的大看板靠“保存的过滤器”，项目页面只会显示自己的任务：",
+        "2) 标签 = 什么场景能做 + 要多久：",
     ]
+    lines.extend(f"   {spec.title} — {spec.purpose}" for spec in LABEL_SPECS)
+    lines.extend(
+        [
+            "   估时标签决定排块时长；没有估时就按默认 30 分钟排。"
+            "没有场景标签的任务不会出现在按场景筛的看板里。",
+            "3) 日期 = due_date 只填真死线，start_date/end_date 是打算什么时候做",
+            "   新任务默认把当天写成 start_date，好让甘特图有一条起点；",
+            "   这个起点不算“今天要做的时间块”，不会占用排程时间。",
+            "",
+            "任务内部还有四个字段值得用起来：",
+            "• 描述 = 说明书（这件事怎么做、做到什么算完）。一行 `- [ ] 步骤` 会变成网页卡片上的清单进度",
+            "• 评论 = 流水日志（某天顺延了、卡在哪、推进到哪），和说明书分开",
+            "• 进度 percent_done = 百分比；完成子任务时父任务进度自动按比例更新",
+            "• 重复 = 固定日历节奏用 monthly/weekly；习惯保养类用“从完成那天重算”，拖几天不会连着弹",
+            "",
+            "跨项目的大看板靠“保存的过滤器”，项目页面只会显示自己的任务：",
+        ]
+    )
     lines.extend(f"• {spec.title}：{spec.description}" for spec in FILTER_SPECS)
     return "\n".join(lines)

@@ -65,9 +65,10 @@ from .todo_domain import (
 from .vikunja import RELATION_KINDS, VikunjaClient, VikunjaError
 
 HELP_TEXT = """Vikunja 私人秘书（仅私聊）
-/todo setup [full]         初始化标签与跨项目看板；full 同时建项目骨架
+/todo setup [full|force]   初始化标签与跨项目看板；full 同时建项目骨架，
+                           force 把已存在的过滤器查询更新成当前版本
 /todo board                列出各个跨项目看板的网页链接
-/todo labels               标签用量，以及还没打标签的任务
+/todo labels               标签用量、每个标签什么意思，以及还没打标签的任务
 /todo guide                秘书使用的三个维度速查
 /todo diag                 检查服务器连通性、版本与结构
 /todo projects             查看项目树
@@ -705,11 +706,29 @@ class VikunjaPlugin(Star):
         if not spec.labels:
             spec.labels = suggest_labels(spec.title, spec.description)
             guessed = bool(spec.labels)
+        self._apply_default_start(spec)
         task = await self.client.create_task(int(project["id"]), spec.payload())
         applied = await self._apply_labels(int(task["id"]), spec.labels)
         if spec.reminder_minutes is not None and not spec.due and not spec.start:
             await self.state.set_task_reminder(int(task["id"]), spec.reminder_minutes)
         return task, path, applied, guessed
+
+    def _apply_default_start(self, spec: AddSpec) -> None:
+        """Anchor new tasks to today so the web Gantt chart draws a bar.
+
+        The anchor is local midnight, which :func:`is_time_block` treats as "no real
+        time block", so it never makes a task look scheduled to the planner or to
+        the today list.
+        """
+        if not bool(self.config.get("default_start_today", True)):
+            return
+        if spec.start or spec.end:
+            return
+        now = self._now()
+        spec.start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if spec.due and spec.due < spec.start:
+            # An overdue-on-arrival task should not start after it is due.
+            spec.start = spec.due.replace(hour=0, minute=0, second=0, microsecond=0)
 
     def _describe_task(self, task: dict[str, Any], path: str, labels: list[str]) -> str:
         due = from_vikunja_time(task.get("due_date"))
@@ -1569,12 +1588,14 @@ class VikunjaPlugin(Star):
     async def todo_setup(self, event: AstrMessageEvent):
         try:
             await self._register_channel(event)
-            include_projects = self._command_tail(event).strip().lower() in {
-                "full",
-                "all",
-                "项目",
-            }
-            report = await bootstrap.apply(self.client, include_projects)
+            tail = self._command_tail(event).strip().lower()
+            include_projects = any(word in tail for word in ("full", "all", "项目"))
+            update_existing = any(
+                word in tail for word in ("force", "update", "刷新", "更新")
+            )
+            report = await bootstrap.apply(
+                self.client, include_projects, update_existing=update_existing
+            )
             filters = {
                 str(item.get("title", "")): int(item["id"])
                 for item in await self.client.list_saved_filters()
@@ -1812,10 +1833,22 @@ class VikunjaPlugin(Star):
             contexts = sorted(
                 title for title in titles if title.lower() not in ESTIMATE_LABELS
             )
-            lines = ["🏷 标签用量（未完成任务口径）", "估时："]
-            lines.extend(f"  {title} × {counts.get(title, 0)}" for title in estimates)
-            lines.append("场景：")
-            lines.extend(f"  {title} × {counts.get(title, 0)}" for title in contexts)
+            purpose = {spec.title: spec.purpose for spec in bootstrap.LABEL_SPECS}
+            lines = [
+                "🏷 标签用量与含义（未完成任务口径）",
+                "估时（决定排时间块时占多久）：",
+            ]
+            lines.extend(
+                f"  {title} × {counts.get(title, 0)}"
+                + (f" — {purpose[title]}" if title in purpose else "")
+                for title in estimates
+            )
+            lines.append("场景（决定什么时候能做、出现在哪个看板）：")
+            lines.extend(
+                f"  {title} × {counts.get(title, 0)}"
+                + (f" — {purpose[title]}" if title in purpose else "")
+                for title in contexts
+            )
             unlabeled = [task for task in tasks if not task_labels(task)]
             lines.append(f"没有任何标签的未完成任务：{len(unlabeled)} 条")
             for task in unlabeled[:5]:
